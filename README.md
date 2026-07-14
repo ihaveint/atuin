@@ -1,3 +1,8 @@
+> **This is a personal fork of [atuinsh/atuin](https://github.com/atuinsh/atuin)**
+> that adds an `Alt+Y` "copy as LLM prompt" action to history search. See
+> [FORK_README.md](./FORK_README.md) for what changed and how to set it up.
+> Everything else below is the original upstream README.
+
 <p align="center">
  <picture>
   <source media="(prefers-color-scheme: dark)" srcset="https://github.com/atuinsh/atuin/assets/53315310/13216a1d-1ac0-4c99-b0eb-d88290fe0efd">
