@@ -179,6 +179,9 @@ pub fn default_emacs_keymap(settings: &Settings) -> Keymap {
 
     // --- Copy ---
     km.bind(key("ctrl-y"), Action::Copy);
+    // Copy the command, its cwd, and its captured output (if available) as an
+    // LLM-ready prompt, rather than just the bare command text.
+    km.bind(key("alt-y"), Action::CopyPrompt);
 
     // --- Numeric shortcuts (alt-1..9 by default, ctrl-1..9 if ctrl_n_shortcuts) ---
     // These return the selection without executing, regardless of enter_accept.

@@ -61,6 +61,7 @@ pub enum InputAction {
     Accept(usize),
     AcceptInspecting,
     Copy(usize),
+    CopyPrompt(usize),
     Delete(usize),
     DeleteAllMatching(usize),
     ReturnOriginal,
@@ -646,6 +647,7 @@ impl State {
                 InputAction::Accept(self.results_state.selected() + *n as usize)
             }
             Action::Copy => InputAction::Copy(self.results_state.selected()),
+            Action::CopyPrompt => InputAction::CopyPrompt(self.results_state.selected()),
             Action::Delete => InputAction::Delete(self.results_state.selected()),
             Action::DeleteAll => InputAction::DeleteAllMatching(self.results_state.selected()),
             Action::ReturnOriginal => InputAction::ReturnOriginal,
@@ -2044,6 +2046,12 @@ pub async fn history(
             set_clipboard(cmd);
             Ok(String::new())
         }
+        InputAction::CopyPrompt(index) => {
+            let entry = results.swap_remove(index);
+            let prompt = build_command_prompt(settings, &entry).await;
+            set_clipboard(prompt);
+            Ok(String::new())
+        }
         InputAction::ReturnQuery | InputAction::Accept(_) => {
             // Either:
             // * index == RETURN_QUERY, in which case we should return the input
@@ -2058,6 +2066,64 @@ pub async fn history(
             unreachable!("should have been handled!")
         }
     }
+}
+
+/// Build an LLM-ready prompt for a history entry: the command, the directory
+/// it was run in, and (if available) its captured output from the daemon.
+async fn build_command_prompt(settings: &Settings, entry: &History) -> String {
+    use std::fmt::Write as _;
+
+    let mut prompt = format!(
+        "I ran this command in `{}`:\n\n```\n{}\n```\n",
+        entry.cwd, entry.command
+    );
+
+    match fetch_command_output(settings, &entry.id).await {
+        Some(output) if !output.trim().is_empty() => {
+            let _ = write!(prompt, "\nand got this output:\n\n```\n{output}\n```\n");
+        }
+        _ => {
+            prompt.push_str(
+                "\n(no captured output is available for this command \u{2014} enable the \
+                 daemon and `atuin pty-proxy` to capture output for future commands)\n",
+            );
+        }
+    }
+
+    prompt.push_str("\nCan you investigate?\n");
+    prompt
+}
+
+#[cfg(feature = "daemon")]
+async fn fetch_command_output(settings: &Settings, history_id: &HistoryId) -> Option<String> {
+    let mut client = atuin_daemon::SemanticClient::from_settings(settings)
+        .await
+        .ok()?;
+    let reply = client
+        .command_output(history_id.0.clone(), Vec::new())
+        .await
+        .ok()?;
+
+    if !reply.found {
+        return None;
+    }
+
+    // The daemon returns content via `lines` (one entry per output line, per
+    // the requested ranges) rather than the flat `output` field, which is
+    // always empty.
+    let output = reply
+        .lines
+        .iter()
+        .map(|line| line.content.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    Some(output)
+}
+
+#[cfg(not(feature = "daemon"))]
+async fn fetch_command_output(_settings: &Settings, _history_id: &HistoryId) -> Option<String> {
+    None
 }
 
 // cli-clipboard only works on Windows, Mac, and Linux.
@@ -3007,6 +3073,37 @@ mod tests {
         let settings = Settings::utc();
         let result = state.execute_action(&Action::Copy, &settings);
         assert!(matches!(result, super::InputAction::Copy(7)));
+    }
+
+    #[test]
+    fn execute_copy_prompt() {
+        use crate::command::client::search::keybindings::Action;
+
+        let mut state = make_executor_state(100, 7);
+        let settings = Settings::utc();
+        let result = state.execute_action(&Action::CopyPrompt, &settings);
+        assert!(matches!(result, super::InputAction::CopyPrompt(7)));
+    }
+
+    #[test]
+    fn build_command_prompt_without_daemon_falls_back_to_command_only() {
+        let entry: History = History::capture()
+            .timestamp(time::OffsetDateTime::now_utc())
+            .command("cargo test")
+            .cwd("/home/user/project")
+            .build()
+            .into();
+
+        let settings = Settings::utc();
+        let prompt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(super::build_command_prompt(&settings, &entry));
+
+        assert!(prompt.contains("cargo test"));
+        assert!(prompt.contains("/home/user/project"));
+        assert!(prompt.contains("Can you investigate?"));
     }
 
     #[test]
